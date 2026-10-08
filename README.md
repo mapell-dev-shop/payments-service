@@ -24,4 +24,4 @@ The payments bounded context of the shop. It charges orders through a fake gatew
 
 ## Known limitations
 
-* The event is published after the database commit. If the process dies in between, the payment exists and nobody hears about it.
+* The event is published after the database commit. If publishing fails or the process dies in between, the payment exists and nobody hears about it. A failed publish stops the worker with an error.
