@@ -19,9 +19,13 @@ The payments bounded context of the shop. It charges orders through a fake gatew
 
 ## Events
 
-* Consumes `StockReserved`.
+* Consumes `StockReserved` and `OrderCancelled`.
 * Publishes `PaymentCaptured` or `PaymentFailed`.
+* On `OrderCancelled`, a `CAPTURED` payment becomes `REFUNDED` and `PaymentRefunded` is published. Cancelling again publishes `PaymentRefunded` again.
+* A `StockReserved` for a cancelled order captures nothing.
 
 ## Known limitations
 
 * The event is published after the database commit. If publishing fails or the process dies in between, the payment exists and nobody hears about it. A failed publish stops the worker with an error.
+* Run one worker at a time. A late `StockReserved` is refused only because the worker handles `OrderCancelled` and `StockReserved` one after the other.
+* A lost `PaymentRefunded` is published again when the customer cancels the order again.

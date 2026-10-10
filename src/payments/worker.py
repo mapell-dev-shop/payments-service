@@ -6,7 +6,7 @@ from shop_contracts.messaging import KafkaEventPublisher, run_consumer
 
 from payments import settings
 from payments.db import SessionLocal
-from payments.handlers import handle_stock_reserved
+from payments.handlers import handle_order_cancelled, handle_stock_reserved
 
 
 def main() -> None:
@@ -16,8 +16,14 @@ def main() -> None:
         with SessionLocal() as session:
             handle_stock_reserved(session, envelope, publisher)
 
+    def on_order_cancelled(envelope: dict[str, Any]) -> None:
+        with SessionLocal() as session:
+            handle_order_cancelled(session, envelope, publisher)
+
     run_consumer(
-        settings.KAFKA_BOOTSTRAP_SERVERS, "payments-service", {"StockReserved": on_stock_reserved}
+        settings.KAFKA_BOOTSTRAP_SERVERS,
+        "payments-service",
+        {"StockReserved": on_stock_reserved, "OrderCancelled": on_order_cancelled},
     )
 
 

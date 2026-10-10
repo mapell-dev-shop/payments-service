@@ -2,13 +2,17 @@ from shop_contracts.messaging import InMemoryEventPublisher
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from payments.handlers import CAPTURE_LIMIT_CENTS, handle_stock_reserved
-from payments.models import Payment
+from payments.handlers import CAPTURE_LIMIT_CENTS, handle_order_cancelled, handle_stock_reserved
+from payments.models import CancelledOrder, Payment, ProcessedEvent
 from tests.conftest import event
 
 
 def stock_reserved(total_cents: int) -> dict[str, object]:
     return event("StockReserved", {"order_id": "o-1", "total_cents": total_cents})
+
+
+def order_cancelled(order_id: str = "o-1") -> dict[str, object]:
+    return event("OrderCancelled", {"order_id": order_id})
 
 
 def test_an_amount_within_the_limit_is_captured(
@@ -52,3 +56,78 @@ def test_a_redelivered_event_charges_once(
 
     assert session.scalar(select(func.count()).select_from(Payment)) == 1
     assert len(publisher.published) == 1
+
+
+def captured_payment(session: Session, publisher: InMemoryEventPublisher) -> Payment:
+    handle_stock_reserved(session, stock_reserved(5000), publisher)
+    publisher.published.clear()
+    payment = session.scalar(select(Payment))
+    assert payment is not None and payment.status == "CAPTURED"
+    return payment
+
+
+def test_cancelling_a_captured_order_refunds_it(
+    session: Session, publisher: InMemoryEventPublisher
+) -> None:
+    payment = captured_payment(session, publisher)
+
+    handle_order_cancelled(session, order_cancelled(), publisher)
+
+    assert payment.status == "REFUNDED"
+    assert payment.amount_cents == 5000
+    [envelope] = publisher.published
+    assert envelope["type"] == "PaymentRefunded"
+    assert envelope["data"] == {"order_id": "o-1", "payment_id": payment.id, "amount_cents": 5000}
+
+
+def test_a_cancel_before_the_stock_is_reserved_means_nothing_is_ever_charged(
+    session: Session, publisher: InMemoryEventPublisher
+) -> None:
+    handle_order_cancelled(session, order_cancelled(), publisher)
+    late = stock_reserved(5000)
+
+    handle_stock_reserved(session, late, publisher)
+
+    assert session.scalar(select(func.count()).select_from(Payment)) == 0
+    assert publisher.published == []
+    assert session.get(CancelledOrder, "o-1") is not None
+    assert session.get(ProcessedEvent, late["event_id"]) is not None
+
+
+def test_a_redelivered_cancel_refunds_once(
+    session: Session, publisher: InMemoryEventPublisher
+) -> None:
+    captured_payment(session, publisher)
+    envelope = order_cancelled()
+
+    handle_order_cancelled(session, envelope, publisher)
+    handle_order_cancelled(session, envelope, publisher)
+
+    assert len(publisher.published) == 1
+
+
+def test_cancelling_again_announces_the_refund_again(
+    session: Session, publisher: InMemoryEventPublisher
+) -> None:
+    payment = captured_payment(session, publisher)
+
+    handle_order_cancelled(session, order_cancelled(), publisher)
+    handle_order_cancelled(session, order_cancelled(), publisher)
+
+    assert payment.status == "REFUNDED"
+    assert [e["type"] for e in publisher.published] == ["PaymentRefunded", "PaymentRefunded"]
+    assert publisher.published[0]["data"] == publisher.published[1]["data"]
+    assert session.scalar(select(func.count()).select_from(CancelledOrder)) == 1
+
+
+def test_cancelling_an_order_whose_payment_failed_refunds_nothing(
+    session: Session, publisher: InMemoryEventPublisher
+) -> None:
+    handle_stock_reserved(session, stock_reserved(CAPTURE_LIMIT_CENTS + 1), publisher)
+    publisher.published.clear()
+
+    handle_order_cancelled(session, order_cancelled(), publisher)
+
+    payment = session.scalar(select(Payment))
+    assert payment is not None and payment.status == "FAILED"
+    assert publisher.published == []
