@@ -29,3 +29,4 @@ The payments bounded context of the shop. It charges orders through a fake gatew
 * The event is published after the database commit. If publishing fails or the process dies in between, the payment exists and nobody hears about it. A failed publish stops the worker with an error.
 * Run one worker at a time. A late `StockReserved` is refused only because the worker handles `OrderCancelled` and `StockReserved` one after the other.
 * A lost `PaymentRefunded` is published again when the customer cancels the order again.
+* Out of scope for cancelling: inventory overselling under concurrent reservations, authentication on cancel, cancelling part of an order, failing refunds, and a cutoff after which an order can no longer be cancelled.
